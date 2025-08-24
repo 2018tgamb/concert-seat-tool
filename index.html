@@ -66,6 +66,14 @@
                         <p class="text-xs text-stone-400 mt-1">將此座位圖的所有狀態還原為初始值。</p>
                     </div>
 
+                    <!-- Export Button Section -->
+                    <div>
+                        <button id="export-status-button" class="w-full py-2 px-4 bg-sky-500 text-white font-semibold rounded-lg shadow-md hover:bg-sky-600 disabled:bg-sky-300 disabled:cursor-not-allowed" disabled>
+                            匯出目前狀態
+                        </button>
+                        <p class="text-xs text-stone-400 mt-1">將雲端上最新的座位狀態匯出成 CSV 檔案。</p>
+                    </div>
+
                         <!-- Statistics Display Section -->
                     <div id="stats-container" class="hidden">
                             <h2 class="text-sm font-medium text-stone-700 mb-2">3. 座位狀態總覽</h2>
@@ -191,6 +199,7 @@
             // Get references to all necessary DOM elements
             const fileInput = document.getElementById('csv-file-input');
             const resetButton = document.getElementById('reset-map-button');
+            const exportButton = document.getElementById('export-status-button');
             const statusFileInput = document.getElementById('status-file-input');
             const seatMap = document.getElementById('seat-map');
             const placeholder = document.getElementById('placeholder');
@@ -226,6 +235,7 @@
             // Add event listeners
             fileInput.addEventListener('change', handleFileSelect);
             resetButton.addEventListener('click', handleResetMap);
+            exportButton.addEventListener('click', handleExportStatus);
             statusFileInput.addEventListener('change', handleStatusFileSelect);
             seatMap.addEventListener('click', handleSeatClick);
             zoomInButton.addEventListener('click', () => updateZoom(0.1));
@@ -253,6 +263,7 @@
                     // 啟用狀態檔案的上傳欄位
                     statusFileInput.disabled = false;
                     resetButton.disabled = false;
+                    exportButton.disabled = false;
 
                     // 設定 Firestore 監聽器並處理初始資料同步
                     await setupFirestoreListener();
@@ -292,35 +303,85 @@
              */
             async function handleStatusFileSelect(event) {
                 const file = event.target.files[0];
-                if (!file || !appState.seats.length) return;
+                if (!file || !appState.mapId) {
+                    alert("請先載入座位圖。");
+                    return;
+                }
 
                 const reader = new FileReader();
                 reader.onload = async (e) => {
                     const text = e.target.result;
                     const updates = parseStatusCSV(text);
-
-                    // 將更新應用到本地狀態
-                    updates.forEach(update => {
-                        const seat = appState.seats.find(s => s.id === update.id);
-                        if (seat) {
-                            seat.status = update.status;
-                        }
-                    });
-
-                    // 檢查 Firestore 中是否已存在此地圖
-                    const mapDocRef = doc(db, 'seat-maps', appState.mapId);
-                    const docSnap = await getDoc(mapDocRef);
-
-                    // 只有當 Firestore 中不存在此地圖時，才上傳這個預設狀態
-                    if (!docSnap.exists()) {
-                        await setDoc(mapDocRef, { seats: appState.seats });
-                        console.log("已將包含預設狀態的座位圖上傳至 Firestore。");
-                    } else {
-                        console.log("Firestore 中已存在此座位圖，預設狀態檔案將被忽略，以雲端資料為準。");
+                    if (updates.length === 0) {
+                        alert("狀態檔案中未找到有效的狀態更新。");
+                        statusFileInput.value = ''; // 清除輸入，以便可以重新選擇同一個檔案
+                        return;
                     }
-                    // UI 的更新將由 onSnapshot 監聽器自動處理
+
+                    if (!confirm(`您確定要從檔案匯入 ${updates.length} 筆狀態更新嗎？\n這將會覆寫雲端上對應座位的現有狀態。`)) {
+                        statusFileInput.value = ''; // 清除輸入
+                        return;
+                    }
+
+                    const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+
+                    try {
+                        await runTransaction(db, async (transaction) => {
+                            const docSnap = await transaction.get(mapDocRef);
+                            if (!docSnap.exists()) {
+                                throw "座位圖文件尚不存在於雲端。請確保座位圖已成功載入。";
+                            }
+
+                            const seats = docSnap.data().seats;
+                            const updatesMap = new Map(updates.map(u => [u.id, u.status]));
+
+                            const updatedSeats = seats.map(seat => {
+                                if (updatesMap.has(seat.id)) {
+                                    return { ...seat, status: updatesMap.get(seat.id) };
+                                }
+                                return seat;
+                            });
+
+                            transaction.set(mapDocRef, { seats: updatedSeats });
+                        });
+                        alert("預設狀態已成功匯入並更新至雲端。畫面將自動同步。");
+                    } catch (error) {
+                        console.error("匯入狀態失敗:", error);
+                        alert(`匯入狀態時發生錯誤: ${error}`);
+                    } finally {
+                        statusFileInput.value = ''; // 無論成功或失敗都清除輸入
+                    }
                 };
                 reader.readAsText(file);
+            }
+
+            /**
+             * Handles exporting the current seat status to a CSV file.
+             */
+            function handleExportStatus() {
+                if (!appState.mapId || appState.seats.length === 0) {
+                    alert("沒有可匯出的座位狀態。");
+                    return;
+                }
+
+                // Create CSV header and rows
+                const header = "seat_id,status\n";
+                const csvRows = appState.seats.map(seat => `${seat.id},${seat.status}`);
+                const csvContent = header + csvRows.join('\n');
+
+                // Create a Blob from the CSV content, with BOM for Excel compatibility
+                const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
+
+                // Create a link to trigger the download
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                
+                const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+                link.setAttribute("download", `status-export-${appState.mapId}-${timestamp}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
             }
 
             /**
