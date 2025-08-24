@@ -223,6 +223,7 @@
                 maxCols: 0, // Maximum number of columns in the grid
                 zoomLevel: 1.0, // Current zoom level
                 mapId: null, // 從檔名生成的座位圖唯一ID
+                accessLevel: 'view', // 'view' or 'edit'
                 firestoreUnsubscribe: null, // 用於儲存Firestore監聽器的取消函式
             };
 
@@ -252,6 +253,7 @@
             seatMap.addEventListener('click', handleSeatClick);
             zoomInButton.addEventListener('click', () => updateZoom(0.1));
             zoomOutButton.addEventListener('click', () => updateZoom(-0.1));
+            window.addEventListener('hashchange', handleHashChange);
 
             // ==================================================================
             // 初始化
@@ -290,19 +292,43 @@
                         }
                     });
 
-                    const mapIdFromHash = window.location.hash.substring(1);
-                    if (mapIdFromHash && mapSelector.querySelector(`option[value="${mapIdFromHash}"]`)) {
-                        console.log(`Loading map from URL hash: ${mapIdFromHash}`);
-                        mapSelector.value = mapIdFromHash;
-                        await handleMapSelection({ target: { value: mapIdFromHash } });
-                    } else {
-                        console.log("No valid map in URL hash, resetting view.");
-                        resetView();
-                    }
+                    handleHashChange(); // Initial call to parse hash
 
                 } catch (error) {
                     console.error("初始化應用程式失敗:", error);
                     alert("無法從雲端獲取座位圖列表。請檢查您的 Firebase 設定和網路連線。");
+                    resetView();
+                }
+            }
+
+            /**
+             * Handles URL hash changes to switch maps or access levels.
+             */
+            function handleHashChange() {
+                console.log(`Hash changed to: ${window.location.hash}`);
+                const hashParts = window.location.hash.substring(1).split('/');
+                const mapIdFromHash = hashParts[0];
+                const accessModeFromHash = hashParts[1];
+
+                const newAccessLevel = (accessModeFromHash === 'edit') ? 'edit' : 'view';
+
+                // If the map ID is different, load the new map
+                if (mapIdFromHash && mapIdFromHash !== appState.mapId) {
+                    if (mapSelector.querySelector(`option[value="${mapIdFromHash}"]`)) {
+                        mapSelector.value = mapIdFromHash;
+                        handleMapSelection({ target: { value: mapIdFromHash } });
+                    } else {
+                        resetView();
+                    }
+                } else if (mapIdFromHash === appState.mapId) {
+                    // If only the access level changed for the current map
+                    if (newAccessLevel !== appState.accessLevel) {
+                        console.log(`Access level changed to: ${newAccessLevel}`);
+                        appState.accessLevel = newAccessLevel;
+                        setUIMode();
+                        renderSeatMap(); // Re-render to update cursors
+                    }
+                } else {
                     resetView();
                 }
             }
@@ -327,7 +353,12 @@
                 } else if (selectedMapId) {
                     fileInputContainer.classList.add('hidden');
                     appState.mapId = selectedMapId;
-                    window.location.hash = selectedMapId;
+                    
+                    // When selecting, URL hash is updated, which triggers handleHashChange
+                    // We just need to make sure the hash is set correctly
+                    const hashParts = window.location.hash.substring(1).split('/');
+                    const accessMode = (hashParts[1] === 'edit') ? 'edit' : 'view';
+                    window.location.hash = `${selectedMapId}/${accessMode}`;
 
                     appState.grid = [];
                     appState.seats = [];
@@ -335,9 +366,6 @@
                     console.log(`Setting up listener for map: ${appState.mapId}`);
                     await setupFirestoreListener();
                     
-                    resetButton.disabled = false;
-                    exportButton.disabled = false;
-                    statusFileInput.disabled = false;
                 } else {
                     window.location.hash = '';
                     resetView();
@@ -351,11 +379,9 @@
                 const file = event.target.files[0];
                 if (!file) return;
 
-                // 如果已有監聽器，先取消訂閱舊的座位圖
                 if (appState.firestoreUnsubscribe) {
                     appState.firestoreUnsubscribe();
                 }
-                // 根據檔名建立一個唯一的 mapId
                 const newMapId = file.name.replace(/\.csv$/i, "").replace(/\s+/g, "-");
 
                 const mapDocRef = doc(db, 'seat-maps', newMapId);
@@ -364,10 +390,8 @@
                 if (docSnap.exists()) {
                     const choice = confirm(`名為 "${newMapId}" 的座位圖已存在。您想要覆蓋它嗎？\n\n- 按「確定」來用新檔案覆蓋雲端上的舊地圖。\n- 按「取消」來載入現有的地圖。`);
                     if (!choice) {
-                        // User chose to load the existing map
                         mapSelector.value = newMapId;
-                        mapSelector.dispatchEvent(new Event('change')); // Trigger loading
-                        fileInput.value = ''; // Clear the file input
+                        window.location.hash = `${newMapId}/view`; // Load existing map in view mode
                         return;
                     }
                 }
@@ -379,7 +403,6 @@
                     const text = e.target.result;
                     parseCSV(text);
 
-                    // Add to selector if not already there
                     let option = mapSelector.querySelector(`option[value="${appState.mapId}"]`);
                     if (!option) {
                         option = document.createElement('option');
@@ -390,21 +413,20 @@
                     mapSelector.value = appState.mapId;
                     fileInputContainer.classList.add('hidden');
 
-                    // Directly write/overwrite the document in Firestore
                     try {
                         console.log(`正在上傳/覆蓋地圖: ${appState.mapId}`);
-                        
-                        // Convert grid from array of arrays to an object
                         const gridForFirestore = Object.assign({}, appState.grid);
 
                         await setDoc(mapDocRef, { 
                             seats: appState.seats,
-                            grid: gridForFirestore, // Save the object, not the array
+                            grid: gridForFirestore,
                             maxCols: appState.maxCols,
                             createdAt: new Date(),
                         });
                         console.log("地圖已成功上傳至 Firestore。");
-                        // Now setup the listener for real-time updates
+                        
+                        window.location.hash = `${appState.mapId}/edit`;
+                        
                         await setupFirestoreListener();
                     } catch (error) {
                         console.error("上傳地圖失敗:", error);
@@ -416,7 +438,6 @@
 
             /**
              * Handles the reset map button click.
-             * This will overwrite the cloud data with a fresh, all-unused state.
              */
             async function handleResetMap() {
                 if (!appState.mapId) {
@@ -455,12 +476,12 @@
                     const updates = parseStatusCSV(text);
                     if (updates.length === 0) {
                         alert("狀態檔案中未找到有效的狀態更新。");
-                        statusFileInput.value = ''; // 清除輸入，以便可以重新選擇同一個檔案
+                        statusFileInput.value = '';
                         return;
                     }
 
                     if (!confirm(`您確定要從檔案匯入 ${updates.length} 筆狀態更新嗎？\n這將會覆寫雲端上對應座位的現有狀態。`)) {
-                        statusFileInput.value = ''; // 清除輸入
+                        statusFileInput.value = '';
                         return;
                     }
 
@@ -490,7 +511,7 @@
                         console.error("匯入狀態失敗:", error);
                         alert(`匯入狀態時發生錯誤: ${error}`);
                     } finally {
-                        statusFileInput.value = ''; // 無論成功或失敗都清除輸入
+                        statusFileInput.value = '';
                     }
                 };
                 reader.readAsText(file);
@@ -505,15 +526,12 @@
                     return;
                 }
 
-                // Create CSV header and rows
                 const header = "seat_id,status\n";
                 const csvRows = appState.seats.map(seat => `${seat.id},${seat.status}`);
                 const csvContent = header + csvRows.join('\n');
 
-                // Create a Blob from the CSV content, with BOM for Excel compatibility
                 const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
 
-                // Create a link to trigger the download
                 const link = document.createElement("a");
                 const url = URL.createObjectURL(blob);
                 link.setAttribute("href", url);
@@ -527,10 +545,8 @@
 
             /**
              * 解析狀態 CSV 檔案。
-             * @returns {Array} 一個包含 {id: 'A-1', status: 'reserved'} 格式物件的陣列。
              */
             function parseStatusCSV(csvText) {
-                // 為提高穩健性，先將換行符號標準化並過濾空白行
                 const normalizedCsvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                 const rows = normalizedCsvText.split('\n')
                     .filter(row => row.trim() !== '');
@@ -550,10 +566,8 @@
 
             /**
              * Parses the CSV text and populates the appState.
-             * @param {string} csvText The raw CSV content as a string.
              */
             function parseCSV(csvText) {
-                // 為提高穩健性，先將換行符號標準化並過濾空白行
                 const normalizedCsvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                 const rows = normalizedCsvText.split('\n')
                     .filter(row => row.trim() !== '')
@@ -570,11 +584,9 @@
                     row.forEach(cell => {
                         const content = cell.trim();
                         if (content.includes('排')) {
-                            // This is a row label
                             currentRowLabel = content.replace('排', '');
                             gridRow.push({ type: 'label', text: content.replace('排', '') });
                         } else if (content.match(/^[WC]\d+$/i)) {
-                            // This is a wheelchair or companion seat
                             const seatId = content;
                             if (!uniqueSeats.has(seatId)) {
                                 uniqueSeats.add(seatId);
@@ -589,11 +601,9 @@
                                 appState.seats.push(seatObj);
                                 gridRow.push({ type: 'seat', id: seatId });
                             } else {
-                                // Duplicate seat, treat as an aisle
                                 gridRow.push({ type: 'aisle' });
                             }
                         } else if (!isNaN(parseInt(content)) && content.length < 4) {
-                            // This is a regular numbered seat
                             const seatNumber = content;
                             const seatId = `${currentRowLabel}-${seatNumber}`;
                             if (!uniqueSeats.has(seatId)) {
@@ -608,11 +618,9 @@
                                 appState.seats.push(seatObj);
                                 gridRow.push({ type: 'seat', id: seatId });
                             } else {
-                                // Duplicate seat, treat as an aisle
                                 gridRow.push({ type: 'aisle' });
                             }
                         } else {
-                            // Empty cell or other content, treat as an aisle
                             gridRow.push({ type: 'aisle' });
                         }
                     });
@@ -640,14 +648,16 @@
                         if (cell.type === 'seat') {
                             const seatData = appState.seats.find(s => s.id === cell.id);
                             if (seatData) {
-                                cellDiv.classList.add('seat', 'cursor-pointer', 'text-white', 'font-semibold');
+                                cellDiv.classList.add('seat', 'text-white', 'font-semibold');
+                                if (appState.accessLevel === 'edit') {
+                                    cellDiv.classList.add('cursor-pointer');
+                                }
                                 cellDiv.textContent = seatData.number;
                                 cellDiv.dataset.id = seatData.id;
                                 updateSeatColor(cellDiv, seatData);
                             } else {
-                                // This is the new part: handle missing seat data gracefully
                                 console.error(`Data mismatch: Seat with ID "${cell.id}" found in grid but not in seats array. Rendering as empty.`);
-                                cellDiv.classList.add('bg-red-800'); // Use a distinct error color
+                                cellDiv.classList.add('bg-red-800');
                                 cellDiv.textContent = '?';
                             }
                         } else if (cell.type === 'aisle') {
@@ -664,13 +674,12 @@
 
             /**
              * 設定對 Firestore 文件的即時監聽器。
-             * 這是資料持久化和同步的核心。
              */
             async function setupFirestoreListener() {
                 if (!appState.mapId) return;
 
                 if (appState.firestoreUnsubscribe) {
-                    appState.firestoreUnsubscribe(); // 取消先前的監聽
+                    appState.firestoreUnsubscribe();
                 }
 
                 const mapDocRef = doc(db, 'seat-maps', appState.mapId);
@@ -683,7 +692,6 @@
                         
                         if (appState.grid.length === 0 && data.grid) {
                             console.log("Local grid is empty, loading grid from Firestore.");
-                            // Convert grid object back to array of arrays
                             appState.grid = Object.values(data.grid);
                             appState.maxCols = data.maxCols;
                         }
@@ -709,6 +717,8 @@
              * 處理座位點擊事件，循環切換狀態並更新 Firestore。
              */
             async function handleSeatClick(event) {
+                if (appState.accessLevel !== 'edit') return;
+
                 const seatDiv = event.target.closest('.seat');
                 if (!seatDiv) return;
 
@@ -716,7 +726,6 @@
                 const mapDocRef = doc(db, 'seat-maps', appState.mapId);
 
                 try {
-                    // 使用 transaction 以安全地讀取和寫入資料，避免多人同時操作時發生衝突
                     await runTransaction(db, async (transaction) => {
                         const docSnap = await transaction.get(mapDocRef);
                         if (!docSnap.exists()) throw "文件不存在！";
@@ -729,7 +738,6 @@
                         const currentStatusIndex = seatStatus.indexOf(seat.status);
                         seat.status = seatStatus[(currentStatusIndex + 1) % seatStatus.length];
                         
-                        // 在 transaction 中更新整個陣列
                         transaction.update(mapDocRef, { seats: seats });
                     });
                     console.log(`座位 ${seatId} 的 transaction 成功提交。`);
@@ -740,16 +748,12 @@
 
             /**
              * Updates the color of a seat element based on its status.
-             * @param {HTMLElement} element The seat div element.
-             * @param {object} seatData The seat object from the appState.
              */
             function updateSeatColor(element, seatData) {
-                // Clear existing color classes
                 element.className = element.className.replace(/\bbg-\w+-\d{2,3}\b/g, '').replace(/\bhover:bg-\w+-\d{2,3}\b/g, '');
                 
                 let colorClass = '';
                 if (seatData.status === 'unused') {
-                    // Use special colors for unused wheelchair and companion seats
                     if (seatData.type === 'wheelchair') {
                         colorClass = statusColors['unused-wheelchair'];
                     } else if (seatData.type === 'companion') {
@@ -758,7 +762,6 @@
                         colorClass = statusColors['unused-regular'];
                     }
                 } else {
-                    // Use standard colors for reserved and claimed
                     colorClass = statusColors[seatData.status];
                 }
                 colorClass.split(' ').forEach(cls => element.classList.add(cls));
@@ -778,6 +781,21 @@
                 document.getElementById('claimed-count').textContent = counts.claimed || 0;
                 document.getElementById('unavailable-count').textContent = counts.unavailable || 0;
             }
+
+            /**
+             * Sets the visibility of UI controls based on the current access level.
+             */
+            function setUIMode() {
+                const isEditMode = appState.accessLevel === 'edit';
+                console.log(`Setting UI mode. Is edit mode? ${isEditMode}`);
+
+                // Enable/disable buttons based on access level
+                resetButton.disabled = !isEditMode;
+                statusFileInput.disabled = !isEditMode;
+
+                // Export button is always enabled if a map is loaded, otherwise disabled.
+                exportButton.disabled = !appState.mapId;
+            }
             
             /**
              * Hides the placeholder and shows the main UI elements.
@@ -787,11 +805,11 @@
                 statsContainer.classList.remove('hidden');
                 stageIndicator.classList.remove('hidden');
                 zoomControls.classList.remove('hidden');
+                setUIMode(); // Set UI based on access level
             }
 
             /**
              * Adjusts the zoom level of the seat map.
-             * @param {number} amount The amount to change the zoom level by.
              */
             function updateZoom(amount) {
                 appState.zoomLevel += amount;
@@ -812,6 +830,7 @@
                 appState.seats = [];
                 appState.grid = [];
                 appState.zoomLevel = 1.0;
+                // Do not reset accessLevel, it's determined by URL
 
                 seatMap.innerHTML = '';
                 seatMap.appendChild(placeholder);
@@ -822,9 +841,7 @@
                 zoomControls.classList.add('hidden');
                 fileInputContainer.classList.add('hidden');
 
-                resetButton.disabled = true;
-                exportButton.disabled = true;
-                statusFileInput.disabled = true;
+                setUIMode(); // Set UI based on access level
 
                 seatMapContainer.style.transform = 'scale(1.0)';
                 zoomLevelDisplay.textContent = '100%';
