@@ -45,11 +45,19 @@
 
                 <div class="space-y-6 flex-grow">
                     <!-- File Uploader Section -->
+                    <!-- Map Selection/Uploader Section -->
                     <div>
-                            <label for="csv-file-input" class="block text-sm font-medium text-stone-700 mb-2">1. 匯入座位圖 (必要)</label>
-                        <input type="file" id="csv-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"/>
-                            <p class="text-xs text-stone-400 mt-1">此檔案定義座位佈局。</p>
+                        <label for="map-selector" class="block text-sm font-medium text-stone-700 mb-2">1. 選擇或匯入座位圖</label>
+                        <select id="map-selector" class="w-full p-2 border border-stone-300 rounded-lg bg-white shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">-- 請選擇座位圖 --</option>
+                            <!-- Existing maps will be populated here by JS -->
+                            <option value="upload-new" class="font-bold text-indigo-600">-- 匯入新的座位圖 --</option>
+                        </select>
+                        <div id="file-input-container" class="hidden mt-2">
+                            <input type="file" id="csv-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"/>
+                            <p class="text-xs text-stone-400 mt-1">此檔案定義座位圖佈局。</p>
                         </div>
+                    </div>
 
                         <!-- Status File Uploader Section -->
                         <div>
@@ -171,33 +179,27 @@
         </main>
     </div>
 
+    <script src="firebase-config.js"></script>
     <script type="module">
         // ==================================================================
         // Firebase 設定 (請替換成您自己的專案設定)
         // ==================================================================
         // 匯入 Firebase v9+ 模組化 SDK 所需的函式
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
-        import { getFirestore, collection, doc, onSnapshot, runTransaction, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
-
-        // Your web app's Firebase configuration
-        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
-        const firebaseConfig = {
-            apiKey: "AIzaSyC-FTdkJp7CAh0NraSz4BCJqAKP14q515c",
-            authDomain: "concert-seat-tool.firebaseapp.com",
-            projectId: "concert-seat-tool",
-            storageBucket: "concert-seat-tool.firebasestorage.app",
-            messagingSenderId: "936796810945",
-            appId: "1:936796810945:web:225a97b87dad0401a86e40",
-            measurementId: "G-8X402NX102"
-        };
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js"; // Use a specific version
+        import { getFirestore, collection, doc, onSnapshot, runTransaction, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
 
         document.addEventListener('DOMContentLoaded', async () => {
+            // ==================================================================
+            // DOM 元素參照
+            // ==================================================================
             // Get references to all necessary DOM elements
             const fileInput = document.getElementById('csv-file-input');
+            const mapSelector = document.getElementById('map-selector');
+            const fileInputContainer = document.getElementById('file-input-container');
             const resetButton = document.getElementById('reset-map-button');
             const exportButton = document.getElementById('export-status-button');
             const statusFileInput = document.getElementById('status-file-input');
@@ -211,6 +213,9 @@
             const zoomLevelDisplay = document.getElementById('zoom-level');
             const seatMapContainer = document.getElementById('seat-map-container');
 
+            // ==================================================================
+            // 應用程式狀態
+            // ==================================================================
             // 應用程式狀態物件
             let appState = {
                 seats: [], // Array to store seat objects
@@ -221,6 +226,9 @@
                 firestoreUnsubscribe: null, // 用於儲存Firestore監聽器的取消函式
             };
 
+            // ==================================================================
+            // 常數與設定
+            // ==================================================================
             // Seat status and corresponding color classes
             const seatStatus = ['unused', 'reserved', 'claimed', 'unavailable'];
             const statusColors = {
@@ -232,7 +240,11 @@
                 unavailable: 'bg-stone-500 hover:bg-stone-600',
             };
 
+            // ==================================================================
+            // 事件監聽器
+            // ==================================================================
             // Add event listeners
+            mapSelector.addEventListener('change', handleMapSelection);
             fileInput.addEventListener('change', handleFileSelect);
             resetButton.addEventListener('click', handleResetMap);
             exportButton.addEventListener('click', handleExportStatus);
@@ -240,6 +252,97 @@
             seatMap.addEventListener('click', handleSeatClick);
             zoomInButton.addEventListener('click', () => updateZoom(0.1));
             zoomOutButton.addEventListener('click', () => updateZoom(-0.1));
+
+            // ==================================================================
+            // 初始化
+            // ==================================================================
+            await initializeApp(); // Initialize the app on page load
+
+            // ==================================================================
+            // 函式定義
+            // ==================================================================
+
+            /**
+             * Initializes the application.
+             * Fetches available maps from Firestore to populate the selector.
+             * Checks URL hash to load a map on startup.
+             */
+            async function initializeApp() {
+                try {
+                    console.log("Initializing app and fetching seat maps...");
+                    const mapsCollectionRef = collection(db, 'seat-maps');
+                    const querySnapshot = await getDocs(mapsCollectionRef);
+                    console.log(`Found ${querySnapshot.size} seat map(s) in Firestore.`);
+
+                    const uploadOption = mapSelector.querySelector('option[value="upload-new"]');
+
+                    querySnapshot.forEach((doc) => {
+                        const mapId = doc.id;
+                        console.log(`Processing map: ${mapId}`);
+                        if (!mapSelector.querySelector(`option[value="${mapId}"]`)) {
+                            const option = document.createElement('option');
+                            option.value = mapId;
+                            option.textContent = mapId;
+                            mapSelector.insertBefore(option, uploadOption);
+                            console.log(`Added "${mapId}" to the dropdown.`);
+                        } else {
+                            console.log(`Map "${mapId}" already in dropdown.`);
+                        }
+                    });
+
+                    const mapIdFromHash = window.location.hash.substring(1);
+                    if (mapIdFromHash && mapSelector.querySelector(`option[value="${mapIdFromHash}"]`)) {
+                        console.log(`Loading map from URL hash: ${mapIdFromHash}`);
+                        mapSelector.value = mapIdFromHash;
+                        await handleMapSelection({ target: { value: mapIdFromHash } });
+                    } else {
+                        console.log("No valid map in URL hash, resetting view.");
+                        resetView();
+                    }
+
+                } catch (error) {
+                    console.error("初始化應用程式失敗:", error);
+                    alert("無法從雲端獲取座位圖列表。請檢查您的 Firebase 設定和網路連線。");
+                    resetView();
+                }
+            }
+
+            /**
+             * Handles selection from the map dropdown.
+             */
+            async function handleMapSelection(event) {
+                const selectedMapId = event.target.value;
+                console.log(`Map selected: ${selectedMapId}`);
+
+                if (appState.firestoreUnsubscribe) {
+                    console.log("Unsubscribing from previous map listener.");
+                    appState.firestoreUnsubscribe();
+                    appState.firestoreUnsubscribe = null;
+                }
+
+                if (selectedMapId === "upload-new") {
+                    fileInputContainer.classList.remove('hidden');
+                    fileInput.value = '';
+                    fileInput.click();
+                } else if (selectedMapId) {
+                    fileInputContainer.classList.add('hidden');
+                    appState.mapId = selectedMapId;
+                    window.location.hash = selectedMapId;
+
+                    appState.grid = [];
+                    appState.seats = [];
+                    
+                    console.log(`Setting up listener for map: ${appState.mapId}`);
+                    await setupFirestoreListener();
+                    
+                    resetButton.disabled = false;
+                    exportButton.disabled = false;
+                    statusFileInput.disabled = false;
+                } else {
+                    window.location.hash = '';
+                    resetView();
+                }
+            }
 
             /**
              * 處理座位圖 (layout) CSV 檔案的選擇事件。
@@ -253,20 +356,60 @@
                     appState.firestoreUnsubscribe();
                 }
                 // 根據檔名建立一個唯一的 mapId
-                appState.mapId = file.name.replace('.csv', '').replace(/\s+/g, '-');
+                const newMapId = file.name.replace(/\.csv$/i, "").replace(/\s+/g, "-");
+
+                const mapDocRef = doc(db, 'seat-maps', newMapId);
+                const docSnap = await getDoc(mapDocRef);
+
+                if (docSnap.exists()) {
+                    const choice = confirm(`名為 "${newMapId}" 的座位圖已存在。您想要覆蓋它嗎？\n\n- 按「確定」來用新檔案覆蓋雲端上的舊地圖。\n- 按「取消」來載入現有的地圖。`);
+                    if (!choice) {
+                        // User chose to load the existing map
+                        mapSelector.value = newMapId;
+                        mapSelector.dispatchEvent(new Event('change')); // Trigger loading
+                        fileInput.value = ''; // Clear the file input
+                        return;
+                    }
+                }
+                
+                appState.mapId = newMapId;
 
                 const reader = new FileReader();
                 reader.onload = async (e) => {
                     const text = e.target.result;
                     parseCSV(text);
 
-                    // 啟用狀態檔案的上傳欄位
-                    statusFileInput.disabled = false;
-                    resetButton.disabled = false;
-                    exportButton.disabled = false;
+                    // Add to selector if not already there
+                    let option = mapSelector.querySelector(`option[value="${appState.mapId}"]`);
+                    if (!option) {
+                        option = document.createElement('option');
+                        option.value = appState.mapId;
+                        option.textContent = appState.mapId;
+                        mapSelector.insertBefore(option, mapSelector.querySelector('option[value="upload-new"]'));
+                    }
+                    mapSelector.value = appState.mapId;
+                    fileInputContainer.classList.add('hidden');
 
-                    // 設定 Firestore 監聽器並處理初始資料同步
-                    await setupFirestoreListener();
+                    // Directly write/overwrite the document in Firestore
+                    try {
+                        console.log(`正在上傳/覆蓋地圖: ${appState.mapId}`);
+                        
+                        // Convert grid from array of arrays to an object
+                        const gridForFirestore = Object.assign({}, appState.grid);
+
+                        await setDoc(mapDocRef, { 
+                            seats: appState.seats,
+                            grid: gridForFirestore, // Save the object, not the array
+                            maxCols: appState.maxCols,
+                            createdAt: new Date(),
+                        });
+                        console.log("地圖已成功上傳至 Firestore。");
+                        // Now setup the listener for real-time updates
+                        await setupFirestoreListener();
+                    } catch (error) {
+                        console.error("上傳地圖失敗:", error);
+                        alert("上傳地圖時發生錯誤。\n" + error);
+                    }
                 };
                 reader.readAsText(file);
             }
@@ -276,21 +419,19 @@
              * This will overwrite the cloud data with a fresh, all-unused state.
              */
             async function handleResetMap() {
-                if (!appState.mapId || appState.seats.length === 0) {
-                    alert("請先載入一個座位圖。");
+                if (!appState.mapId) {
+                    alert("沒有載入中的座位圖。");
                     return;
                 }
 
-                if (!confirm('確定要重設這個座位圖的雲端狀態嗎？\n所有已儲存的狀態將會被清除，並還原為初始佈局。')) {
+                if (!confirm(`確定要重設地圖 "${appState.mapId}" 的雲端狀態嗎？\n所有已儲存的狀態將會被清除。`)) {
                     return;
                 }
 
                 try {
-                    console.log(`正在重設地圖 ${appState.mapId} 的雲端狀態...`);
                     const mapDocRef = doc(db, 'seat-maps', appState.mapId);
-                    // 建立一個所有座位狀態都是 'unused' 的新陣列
                     const freshSeats = appState.seats.map(seat => ({ ...seat, status: 'unused' }));
-                    await setDoc(mapDocRef, { seats: freshSeats });
+                    await setDoc(mapDocRef, { seats: freshSeats }, { merge: true });
                     alert('雲端狀態已成功重設！頁面將會自動更新。');
                 } catch (error) {
                     console.error("重設失敗:", error);
@@ -342,7 +483,7 @@
                                 return seat;
                             });
 
-                            transaction.set(mapDocRef, { seats: updatedSeats });
+                            transaction.update(mapDocRef, { seats: updatedSeats });
                         });
                         alert("預設狀態已成功匯入並更新至雲端。畫面將自動同步。");
                     } catch (error) {
@@ -487,14 +628,13 @@
              * Renders the seat map on the page based on the parsed data.
              */
             function renderSeatMap() {
+                console.log("Starting renderSeatMap()...");
                 seatMap.innerHTML = '';
-                // Set the grid columns based on the widest row in the CSV
                 seatMap.style.gridTemplateColumns = `repeat(${appState.maxCols}, minmax(0, 1fr))`;
 
-                appState.grid.forEach(row => {
-                    row.forEach(cell => {
+                appState.grid.forEach((row, rowIndex) => {
+                    row.forEach((cell, colIndex) => {
                         const cellDiv = document.createElement('div');
-                        // Use w-4 h-4 and text-[0.6rem] for a compact display
                         cellDiv.className = 'flex items-center justify-center text-[0.6rem] w-5 h-5 rounded';
                         
                         if (cell.type === 'seat') {
@@ -504,6 +644,11 @@
                                 cellDiv.textContent = seatData.number;
                                 cellDiv.dataset.id = seatData.id;
                                 updateSeatColor(cellDiv, seatData);
+                            } else {
+                                // This is the new part: handle missing seat data gracefully
+                                console.error(`Data mismatch: Seat with ID "${cell.id}" found in grid but not in seats array. Rendering as empty.`);
+                                cellDiv.classList.add('bg-red-800'); // Use a distinct error color
+                                cellDiv.textContent = '?';
                             }
                         } else if (cell.type === 'aisle') {
                             cellDiv.classList.add('bg-stone-200', 'rounded-sm');
@@ -514,6 +659,7 @@
                         seatMap.appendChild(cellDiv);
                     });
                 });
+                console.log("Finished renderSeatMap().");
             }
 
             /**
@@ -521,32 +667,40 @@
              * 這是資料持久化和同步的核心。
              */
             async function setupFirestoreListener() {
+                if (!appState.mapId) return;
+
                 if (appState.firestoreUnsubscribe) {
                     appState.firestoreUnsubscribe(); // 取消先前的監聽
                 }
 
                 const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+                console.log(`Listening to document: /seat-maps/${appState.mapId}`);
 
-                // onSnapshot 提供文件的即時串流
-                appState.firestoreUnsubscribe = onSnapshot(mapDocRef, async (docSnap) => {
+                appState.firestoreUnsubscribe = onSnapshot(mapDocRef, (docSnap) => {
                     if (docSnap.exists()) {
-                        console.log("從 Firestore 接收到更新。");
+                        console.log("Received update from Firestore. Document data:", docSnap.data());
                         const data = docSnap.data();
-                        // 用 Firestore 的資料更新本地狀態
+                        
+                        if (appState.grid.length === 0 && data.grid) {
+                            console.log("Local grid is empty, loading grid from Firestore.");
+                            // Convert grid object back to array of arrays
+                            appState.grid = Object.values(data.grid);
+                            appState.maxCols = data.maxCols;
+                        }
                         appState.seats = data.seats;
+
+                        console.log("Calling renderSeatMap().");
+                        renderSeatMap();
+                        updateUIOnLoad();
+                        updateStats();
                     } else {
-                        console.log("Firestore 中無此文件，正在建立...");
-                        // 如果文件不存在，用初始佈局建立它
-                        await setDoc(mapDocRef, { seats: appState.seats });
-                        console.log("已將初始座位圖儲存至 Firestore。");
+                        console.error(`Listener error: Document /seat-maps/${appState.mapId} does not exist.`);
+                        alert(`在雲端找不到名為 "${appState.mapId}" 的座位圖。請重新選擇或上傳。`);
+                        resetView();
+                        mapSelector.value = "";
                     }
-                    
-                    // 使用最新狀態渲染/更新UI
-                    renderSeatMap();
-                    updateUIOnLoad();
-                    updateStats();
                 }, (error) => {
-                    console.error("Firestore 監聽器錯誤: ", error);
+                    console.error("Firestore listener error: ", error);
                     alert("無法連接到協作服務，請檢查您的 Firebase 設定和網路連線。");
                 });
             }
@@ -644,6 +798,36 @@
                 appState.zoomLevel = Math.max(0.5, Math.min(appState.zoomLevel, 2.0));
                 seatMapContainer.style.transform = `scale(${appState.zoomLevel})`;
                 zoomLevelDisplay.textContent = `${Math.round(appState.zoomLevel * 100)}%`;
+            }
+
+            /**
+             * Resets the UI to its initial state.
+             */
+            function resetView() {
+                if (appState.firestoreUnsubscribe) {
+                    appState.firestoreUnsubscribe();
+                    appState.firestoreUnsubscribe = null;
+                }
+                appState.mapId = null;
+                appState.seats = [];
+                appState.grid = [];
+                appState.zoomLevel = 1.0;
+
+                seatMap.innerHTML = '';
+                seatMap.appendChild(placeholder);
+                placeholder.classList.remove('hidden');
+                
+                statsContainer.classList.add('hidden');
+                stageIndicator.classList.add('hidden');
+                zoomControls.classList.add('hidden');
+                fileInputContainer.classList.add('hidden');
+
+                resetButton.disabled = true;
+                exportButton.disabled = true;
+                statusFileInput.disabled = true;
+
+                seatMapContainer.style.transform = 'scale(1.0)';
+                zoomLevelDisplay.textContent = '100%';
             }
         });
     </script>
