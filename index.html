@@ -43,23 +43,11 @@
                     <p class="text-sm text-stone-500 mt-1">匯入CSV座位圖，輕鬆管理與協作。</p>
                 </header>
 
-                <!-- Login Section -->
-                <div id="auth-container" class="mb-6 p-4 bg-indigo-50 rounded-lg">
-                    <div id="user-info" class="hidden">
-                        <p class="text-sm font-medium text-stone-700">已登入：<span id="user-email" class="font-bold"></span></p>
-                        <button id="logout-button" class="mt-2 w-full text-sm py-2 px-4 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-600">登出</button>
-                    </div>
-                    <div id="login-prompt">
-                        <p class="text-sm text-stone-600 mb-2">請先登入以編輯座位圖。</p>
-                        <button id="login-button" class="w-full py-2 px-4 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700">使用 Google 登入</button>
-                    </div>
-                </div>
-
                 <div class="space-y-6 flex-grow">
                     <!-- File Uploader Section -->
                     <div>
                             <label for="csv-file-input" class="block text-sm font-medium text-stone-700 mb-2">1. 匯入座位圖 (必要)</label>
-                        <input type="file" id="csv-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" disabled/>
+                        <input type="file" id="csv-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"/>
                             <p class="text-xs text-stone-400 mt-1">此檔案定義座位佈局。</p>
                         </div>
 
@@ -182,7 +170,6 @@
         // 匯入 Firebase v9+ 模組化 SDK 所需的函式
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
         import { getFirestore, collection, doc, onSnapshot, runTransaction, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
-        import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
         // Your web app's Firebase configuration
         // For Firebase JS SDK v7.20.0 and later, measurementId is optional
@@ -199,15 +186,9 @@
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-        const auth = getAuth(app);
 
         document.addEventListener('DOMContentLoaded', async () => {
             // Get references to all necessary DOM elements
-            const loginButton = document.getElementById('login-button');
-            const logoutButton = document.getElementById('logout-button');
-            const loginPrompt = document.getElementById('login-prompt');
-            const userInfo = document.getElementById('user-info');
-            const userEmail = document.getElementById('user-email');
             const fileInput = document.getElementById('csv-file-input');
             const resetButton = document.getElementById('reset-map-button');
             const statusFileInput = document.getElementById('status-file-input');
@@ -243,71 +224,12 @@
             };
 
             // Add event listeners
-            loginButton.addEventListener('click', handleLogin);
-            logoutButton.addEventListener('click', handleLogout);
             fileInput.addEventListener('change', handleFileSelect);
             resetButton.addEventListener('click', handleResetMap);
             statusFileInput.addEventListener('change', handleStatusFileSelect);
             seatMap.addEventListener('click', handleSeatClick);
             zoomInButton.addEventListener('click', () => updateZoom(0.1));
             zoomOutButton.addEventListener('click', () => updateZoom(-0.1));
-
-            // 處理從 Google 登入重新導向後的結果
-            // 這個區塊會在頁面載入時檢查是否有登入資訊
-            try {
-                const result = await getRedirectResult(auth);
-                if (result) {
-                    // 登入成功
-                    const user = result.user;
-                    console.log("透過重新導向成功登入:", user.email);
-                }
-            } catch (error) {
-                // 處理錯誤
-                console.error("處理重新導向結果時發生錯誤:", error);
-                const errorCode = error.code;
-                const errorMessage = error.message;
-                alert(`登入失敗 (${errorCode}): ${errorMessage}`);
-            }
-
-            // Listen for authentication state changes
-            onAuthStateChanged(auth, user => {
-                if (user) {
-                    // User is signed in
-                    loginPrompt.classList.add('hidden');
-                    userInfo.classList.remove('hidden');
-                    userEmail.textContent = user.email;
-                    fileInput.disabled = false;
-                    // Reset button is enabled after a map is loaded
-                } else {
-                    // User is signed out
-                    loginPrompt.classList.remove('hidden');
-                    userInfo.classList.add('hidden');
-                    userEmail.textContent = '';
-                    // Disable controls and clear the map
-                    fileInput.disabled = true;
-                    statusFileInput.disabled = true;
-                    resetButton.disabled = true;
-                    seatMap.innerHTML = ''; // Clear map
-                    placeholder.classList.remove('hidden');
-                    statsContainer.classList.add('hidden');
-                    stageIndicator.classList.add('hidden');
-                    zoomControls.classList.add('hidden');
-                }
-            });
-
-            async function handleLogin() {
-                const provider = new GoogleAuthProvider();
-                try {
-                    // 改用頁面重新導向的方式登入，更加穩定
-                    await signInWithRedirect(auth, provider);
-                } catch (error) {
-                    console.error("啟動登入流程失敗:", error);
-                }
-            }
-
-            async function handleLogout() {
-                await signOut(auth);
-            }
 
             /**
              * 處理座位圖 (layout) CSV 檔案的選擇事件。
