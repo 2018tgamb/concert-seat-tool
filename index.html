@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>互動式音樂會座位劃位工具</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts for a modern look (Inter and Noto Sans TC) -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Custom CSS for hover effects and transform origin -->
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+        }
+        /* 讓禁用的輸入框有更清晰的樣式 */
+        input:disabled {
+            cursor: not-allowed;
+            background-color: #f3f4f6;
+        }
+        .seat {
+            transition: all 0.2s ease-in-out;
+        }
+        .seat:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 15px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+        #seat-map-container {
+            transform-origin: top center;
+        }
+    </style>
+</head>
+<body class="bg-stone-50 text-stone-800">
+
+    <div class="flex flex-col lg:flex-row min-h-screen">
+        
+        <!-- Sidebar: Contains all controls and information -->
+        <aside class="w-full lg:w-80 xl:w-96 bg-white p-6 shadow-lg lg:fixed lg:h-full lg:overflow-y-auto">
+            <div class="flex flex-col h-full">
+                <header class="mb-8">
+                    <h1 class="text-2xl font-bold text-indigo-700">音樂會座位劃位工具</h1>
+                    <p class="text-sm text-stone-500 mt-1">匯入CSV座位圖，輕鬆管理與協作。</p>
+                </header>
+
+                <!-- Login Section -->
+                <div id="auth-container" class="mb-6 p-4 bg-indigo-50 rounded-lg">
+                    <div id="user-info" class="hidden">
+                        <p class="text-sm font-medium text-stone-700">已登入：<span id="user-email" class="font-bold"></span></p>
+                        <button id="logout-button" class="mt-2 w-full text-sm py-2 px-4 bg-indigo-500 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-600">登出</button>
+                    </div>
+                    <div id="login-prompt">
+                        <p class="text-sm text-stone-600 mb-2">請先登入以編輯座位圖。</p>
+                        <button id="login-button" class="w-full py-2 px-4 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700">使用 Google 登入</button>
+                    </div>
+                </div>
+
+                <div class="space-y-6 flex-grow">
+                    <!-- File Uploader Section -->
+                    <div>
+                            <label for="csv-file-input" class="block text-sm font-medium text-stone-700 mb-2">1. 匯入座位圖 (必要)</label>
+                        <input type="file" id="csv-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" disabled/>
+                            <p class="text-xs text-stone-400 mt-1">此檔案定義座位佈局。</p>
+                        </div>
+
+                        <!-- Status File Uploader Section -->
+                        <div>
+                            <label for="status-file-input" class="block text-sm font-medium text-stone-700 mb-2">2. 匯入預設狀態 (選填)</label>
+                            <input type="file" id="status-file-input" accept=".csv" class="block w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer" disabled/>
+                            <p class="text-xs text-stone-400 mt-1">格式: `座位ID,狀態` (例: `10-15,reserved`)。</p>
+                    </div>
+
+                    <!-- Reset Button Section -->
+                    <div>
+                        <button id="reset-map-button" class="w-full py-2 px-4 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 disabled:bg-red-300 disabled:cursor-not-allowed" disabled>
+                            重設雲端狀態
+                        </button>
+                        <p class="text-xs text-stone-400 mt-1">將此座位圖的所有狀態還原為初始值。</p>
+                    </div>
+
+                        <!-- Statistics Display Section -->
+                    <div id="stats-container" class="hidden">
+                            <h2 class="text-sm font-medium text-stone-700 mb-2">3. 座位狀態總覽</h2>
+                        <div class="grid grid-cols-2 gap-4 text-center">
+                            <div class="bg-slate-100 p-3 rounded-lg">
+                                <div id="unused-count" class="text-2xl font-bold text-slate-600">0</div>
+                                <div class="text-xs font-medium text-slate-500">未使用</div>
+                            </div>
+                            <div class="bg-stone-100 p-3 rounded-lg">
+                                <div id="unavailable-count" class="text-2xl font-bold text-stone-600">0</div>
+                                <div class="text-xs font-medium text-stone-500">暫不開放</div>
+                            </div>
+                            <div class="bg-amber-100 p-3 rounded-lg">
+                                <div id="reserved-count" class="text-2xl font-bold text-amber-600">0</div>
+                                <div class="text-xs font-medium text-amber-500">已預排</div>
+                            </div>
+                            <div class="bg-emerald-100 p-3 rounded-lg">
+                                <div id="claimed-count" class="text-2xl font-bold text-emerald-600">0</div>
+                                <div class="text-xs font-medium text-emerald-500">已取票</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Legend Section -->
+                    <div>
+                        <h3 class="text-sm font-medium text-stone-700 mb-2">圖例</h3>
+                        <div class="flex flex-wrap gap-4">
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-slate-400"></div>
+                                <span class="text-sm">未使用</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-rose-400"></div>
+                                <span class="text-sm">輪椅席 (W)</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-sky-400"></div>
+                                <span class="text-sm">陪同席 (C)</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-amber-400"></div>
+                                <span class="text-sm">已預排</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-emerald-500"></div>
+                                <span class="text-sm">已取票</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded bg-stone-500"></div>
+                                <span class="text-sm">暫不開放</span>
+                            </div>
+                             <div class="flex items-center space-x-2">
+                                <div class="w-5 h-5 rounded-sm bg-stone-200"></div>
+                                <span class="text-sm">走道</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Firebase Info -->
+                <div class="mt-auto pt-4 border-t border-stone-200">
+                    <p class="text-xs text-stone-400">
+                        協作功能由 Firebase 提供。請在程式碼中設定您自己的 Firebase 專案配置。
+                    </p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content: Displays the seat map -->
+        <main class="w-full lg:ml-80 xl:ml-96 p-4 sm:p-6 lg:p-8">
+            <div class="w-full min-h-full bg-white rounded-xl shadow-md p-4 flex flex-col items-center justify-center overflow-hidden">
+                <div id="stage-indicator" class="w-1/2 bg-stone-700 text-white text-center py-2 rounded-t-lg mb-4 hidden">
+                    舞 台
+                </div>
+                <!-- Zoom controls for seat map (hidden until a file is loaded) -->
+                <div id="zoom-controls" class="fixed bottom-4 right-4 z-20 bg-white/80 backdrop-blur-sm p-2 rounded-lg shadow-lg flex items-center space-x-2 hidden">
+                    <button id="zoom-out" class="w-8 h-8 rounded-full bg-indigo-500 text-white font-bold flex items-center justify-center">-</button>
+                    <span id="zoom-level" class="text-sm font-medium w-10 text-center">100%</span>
+                    <button id="zoom-in" class="w-8 h-8 rounded-full bg-indigo-500 text-white font-bold flex items-center justify-center">+</button>
+                </div>
+                <!-- Seat map container, allows for scaling and overflow scrolling -->
+                <div id="seat-map-container" class="w-full overflow-auto flex-grow flex items-center justify-center">
+                    <div id="seat-map" class="grid gap-1">
+                        <!-- Placeholder content before a file is loaded -->
+                        <div id="placeholder" class="text-center text-stone-500 p-10">
+                            <svg class="mx-auto h-12 w-12 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                            </svg>
+                            <h3 class="mt-2 text-sm font-medium text-stone-900">沒有座位圖</h3>
+                            <p class="mt-1 text-sm text-stone-500">請從左側面板匯入一個 CSV 檔案開始。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script type="module">
+        // ==================================================================
+        // Firebase 設定 (請替換成您自己的專案設定)
+        // ==================================================================
+        // 匯入 Firebase v9+ 模組化 SDK 所需的函式
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
+        import { getFirestore, collection, doc, onSnapshot, runTransaction, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
+
+        // Your web app's Firebase configuration
+        // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+        const firebaseConfig = {
+            apiKey: "AIzaSyC-FTdkJp7CAh0NraSz4BCJqAKP14q515c",
+            authDomain: "concert-seat-tool.firebaseapp.com",
+            projectId: "concert-seat-tool",
+            storageBucket: "concert-seat-tool.firebasestorage.app",
+            messagingSenderId: "936796810945",
+            appId: "1:936796810945:web:225a97b87dad0401a86e40",
+            measurementId: "G-8X402NX102"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Get references to all necessary DOM elements
+            const loginButton = document.getElementById('login-button');
+            const logoutButton = document.getElementById('logout-button');
+            const loginPrompt = document.getElementById('login-prompt');
+            const userInfo = document.getElementById('user-info');
+            const userEmail = document.getElementById('user-email');
+            const fileInput = document.getElementById('csv-file-input');
+            const resetButton = document.getElementById('reset-map-button');
+            const statusFileInput = document.getElementById('status-file-input');
+            const seatMap = document.getElementById('seat-map');
+            const placeholder = document.getElementById('placeholder');
+            const statsContainer = document.getElementById('stats-container');
+            const stageIndicator = document.getElementById('stage-indicator');
+            const zoomControls = document.getElementById('zoom-controls');
+            const zoomInButton = document.getElementById('zoom-in');
+            const zoomOutButton = document.getElementById('zoom-out');
+            const zoomLevelDisplay = document.getElementById('zoom-level');
+            const seatMapContainer = document.getElementById('seat-map-container');
+
+            // 應用程式狀態物件
+            let appState = {
+                seats: [], // Array to store seat objects
+                grid: [], // 2D array to represent the seat map grid
+                maxCols: 0, // Maximum number of columns in the grid
+                zoomLevel: 1.0, // Current zoom level
+                mapId: null, // 從檔名生成的座位圖唯一ID
+                firestoreUnsubscribe: null, // 用於儲存Firestore監聽器的取消函式
+            };
+
+            // Seat status and corresponding color classes
+            const seatStatus = ['unused', 'reserved', 'claimed', 'unavailable'];
+            const statusColors = {
+                'unused-regular': 'bg-slate-400 hover:bg-slate-500',
+                'unused-wheelchair': 'bg-rose-400 hover:bg-rose-500',
+                'unused-companion': 'bg-sky-400 hover:bg-sky-500',
+                reserved: 'bg-amber-400 hover:bg-amber-500',
+                claimed: 'bg-emerald-500 hover:bg-emerald-600',
+                unavailable: 'bg-stone-500 hover:bg-stone-600',
+            };
+
+            // Add event listeners
+            loginButton.addEventListener('click', handleLogin);
+            logoutButton.addEventListener('click', handleLogout);
+            fileInput.addEventListener('change', handleFileSelect);
+            resetButton.addEventListener('click', handleResetMap);
+            statusFileInput.addEventListener('change', handleStatusFileSelect);
+            seatMap.addEventListener('click', handleSeatClick);
+            zoomInButton.addEventListener('click', () => updateZoom(0.1));
+            zoomOutButton.addEventListener('click', () => updateZoom(-0.1));
+
+            // 處理從 Google 登入重新導向後的結果
+            // 這個區塊會在頁面載入時檢查是否有登入資訊
+            try {
+                const result = await getRedirectResult(auth);
+                if (result) {
+                    // 登入成功
+                    const user = result.user;
+                    console.log("透過重新導向成功登入:", user.email);
+                }
+            } catch (error) {
+                // 處理錯誤
+                console.error("處理重新導向結果時發生錯誤:", error);
+                const errorCode = error.code;
+                const errorMessage = error.message;
+                alert(`登入失敗 (${errorCode}): ${errorMessage}`);
+            }
+
+            // Listen for authentication state changes
+            onAuthStateChanged(auth, user => {
+                if (user) {
+                    // User is signed in
+                    loginPrompt.classList.add('hidden');
+                    userInfo.classList.remove('hidden');
+                    userEmail.textContent = user.email;
+                    fileInput.disabled = false;
+                    // Reset button is enabled after a map is loaded
+                } else {
+                    // User is signed out
+                    loginPrompt.classList.remove('hidden');
+                    userInfo.classList.add('hidden');
+                    userEmail.textContent = '';
+                    // Disable controls and clear the map
+                    fileInput.disabled = true;
+                    statusFileInput.disabled = true;
+                    resetButton.disabled = true;
+                    seatMap.innerHTML = ''; // Clear map
+                    placeholder.classList.remove('hidden');
+                    statsContainer.classList.add('hidden');
+                    stageIndicator.classList.add('hidden');
+                    zoomControls.classList.add('hidden');
+                }
+            });
+
+            async function handleLogin() {
+                const provider = new GoogleAuthProvider();
+                try {
+                    // 改用頁面重新導向的方式登入，更加穩定
+                    await signInWithRedirect(auth, provider);
+                } catch (error) {
+                    console.error("啟動登入流程失敗:", error);
+                }
+            }
+
+            async function handleLogout() {
+                await signOut(auth);
+            }
+
+            /**
+             * 處理座位圖 (layout) CSV 檔案的選擇事件。
+             */
+            async function handleFileSelect(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                // 如果已有監聽器，先取消訂閱舊的座位圖
+                if (appState.firestoreUnsubscribe) {
+                    appState.firestoreUnsubscribe();
+                }
+                // 根據檔名建立一個唯一的 mapId
+                appState.mapId = file.name.replace('.csv', '').replace(/\s+/g, '-');
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const text = e.target.result;
+                    parseCSV(text);
+
+                    // 啟用狀態檔案的上傳欄位
+                    statusFileInput.disabled = false;
+                    resetButton.disabled = false;
+
+                    // 設定 Firestore 監聽器並處理初始資料同步
+                    await setupFirestoreListener();
+                };
+                reader.readAsText(file);
+            }
+
+            /**
+             * Handles the reset map button click.
+             * This will overwrite the cloud data with a fresh, all-unused state.
+             */
+            async function handleResetMap() {
+                if (!appState.mapId || appState.seats.length === 0) {
+                    alert("請先載入一個座位圖。");
+                    return;
+                }
+
+                if (!confirm('確定要重設這個座位圖的雲端狀態嗎？\n所有已儲存的狀態將會被清除，並還原為初始佈局。')) {
+                    return;
+                }
+
+                try {
+                    console.log(`正在重設地圖 ${appState.mapId} 的雲端狀態...`);
+                    const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+                    // 建立一個所有座位狀態都是 'unused' 的新陣列
+                    const freshSeats = appState.seats.map(seat => ({ ...seat, status: 'unused' }));
+                    await setDoc(mapDocRef, { seats: freshSeats });
+                    alert('雲端狀態已成功重設！頁面將會自動更新。');
+                } catch (error) {
+                    console.error("重設失敗:", error);
+                    alert("重設雲端狀態時發生錯誤，請檢查主控台訊息。");
+                }
+            }
+
+            /**
+             * 處理可選的狀態 (status) CSV 檔案選擇事件。
+             */
+            async function handleStatusFileSelect(event) {
+                const file = event.target.files[0];
+                if (!file || !appState.seats.length) return;
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const text = e.target.result;
+                    const updates = parseStatusCSV(text);
+
+                    // 將更新應用到本地狀態
+                    updates.forEach(update => {
+                        const seat = appState.seats.find(s => s.id === update.id);
+                        if (seat) {
+                            seat.status = update.status;
+                        }
+                    });
+
+                    // 檢查 Firestore 中是否已存在此地圖
+                    const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+                    const docSnap = await getDoc(mapDocRef);
+
+                    // 只有當 Firestore 中不存在此地圖時，才上傳這個預設狀態
+                    if (!docSnap.exists()) {
+                        await setDoc(mapDocRef, { seats: appState.seats });
+                        console.log("已將包含預設狀態的座位圖上傳至 Firestore。");
+                    } else {
+                        console.log("Firestore 中已存在此座位圖，預設狀態檔案將被忽略，以雲端資料為準。");
+                    }
+                    // UI 的更新將由 onSnapshot 監聽器自動處理
+                };
+                reader.readAsText(file);
+            }
+
+            /**
+             * 解析狀態 CSV 檔案。
+             * @returns {Array} 一個包含 {id: 'A-1', status: 'reserved'} 格式物件的陣列。
+             */
+            function parseStatusCSV(csvText) {
+                // 為提高穩健性，先將換行符號標準化並過濾空白行
+                const normalizedCsvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                const rows = normalizedCsvText.split('\n')
+                    .filter(row => row.trim() !== '');
+
+                const updates = [];
+                const validStatuses = new Set(seatStatus);
+
+                rows.forEach(row => {
+                    const [id, status] = row.split(',').map(s => s ? s.trim() : '');
+                    if (id && status && validStatuses.has(status)) {
+                        updates.push({ id, status });
+                    }
+                });
+                console.log(`解析到 ${updates.length} 筆狀態更新。`);
+                return updates;
+            }
+
+            /**
+             * Parses the CSV text and populates the appState.
+             * @param {string} csvText The raw CSV content as a string.
+             */
+            function parseCSV(csvText) {
+                // 為提高穩健性，先將換行符號標準化並過濾空白行
+                const normalizedCsvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                const rows = normalizedCsvText.split('\n')
+                    .filter(row => row.trim() !== '')
+                    .map(row => row.split(','));
+
+                appState.seats = [];
+                appState.grid = [];
+                let maxCols = 0;
+                let currentRowLabel = '';
+                const uniqueSeats = new Set();
+
+                rows.forEach(row => {
+                    let gridRow = [];
+                    row.forEach(cell => {
+                        const content = cell.trim();
+                        if (content.includes('排')) {
+                            // This is a row label
+                            currentRowLabel = content.replace('排', '');
+                            gridRow.push({ type: 'label', text: content.replace('排', '') });
+                        } else if (content.match(/^[WC]\d+$/i)) {
+                            // This is a wheelchair or companion seat
+                            const seatId = content;
+                            if (!uniqueSeats.has(seatId)) {
+                                uniqueSeats.add(seatId);
+                                const seatType = content.charAt(0).toUpperCase() === 'W' ? 'wheelchair' : 'companion';
+                                const seatObj = {
+                                    id: seatId,
+                                    row: currentRowLabel,
+                                    number: content,
+                                    type: seatType,
+                                    status: 'unused',
+                                };
+                                appState.seats.push(seatObj);
+                                gridRow.push({ type: 'seat', id: seatId });
+                            } else {
+                                // Duplicate seat, treat as an aisle
+                                gridRow.push({ type: 'aisle' });
+                            }
+                        } else if (!isNaN(parseInt(content)) && content.length < 4) {
+                            // This is a regular numbered seat
+                            const seatNumber = content;
+                            const seatId = `${currentRowLabel}-${seatNumber}`;
+                            if (!uniqueSeats.has(seatId)) {
+                                uniqueSeats.add(seatId);
+                                const seatObj = {
+                                    id: seatId,
+                                    row: currentRowLabel,
+                                    number: seatNumber,
+                                    type: 'regular',
+                                    status: 'unused',
+                                };
+                                appState.seats.push(seatObj);
+                                gridRow.push({ type: 'seat', id: seatId });
+                            } else {
+                                // Duplicate seat, treat as an aisle
+                                gridRow.push({ type: 'aisle' });
+                            }
+                        } else {
+                            // Empty cell or other content, treat as an aisle
+                            gridRow.push({ type: 'aisle' });
+                        }
+                    });
+                    appState.grid.push(gridRow);
+                    if (row.length > maxCols) {
+                        maxCols = row.length;
+                    }
+                });
+                appState.maxCols = maxCols;
+            }
+
+            /**
+             * Renders the seat map on the page based on the parsed data.
+             */
+            function renderSeatMap() {
+                seatMap.innerHTML = '';
+                // Set the grid columns based on the widest row in the CSV
+                seatMap.style.gridTemplateColumns = `repeat(${appState.maxCols}, minmax(0, 1fr))`;
+
+                appState.grid.forEach(row => {
+                    row.forEach(cell => {
+                        const cellDiv = document.createElement('div');
+                        // Use w-4 h-4 and text-[0.6rem] for a compact display
+                        cellDiv.className = 'flex items-center justify-center text-[0.6rem] w-5 h-5 rounded';
+                        
+                        if (cell.type === 'seat') {
+                            const seatData = appState.seats.find(s => s.id === cell.id);
+                            if (seatData) {
+                                cellDiv.classList.add('seat', 'cursor-pointer', 'text-white', 'font-semibold');
+                                cellDiv.textContent = seatData.number;
+                                cellDiv.dataset.id = seatData.id;
+                                updateSeatColor(cellDiv, seatData);
+                            }
+                        } else if (cell.type === 'aisle') {
+                            cellDiv.classList.add('bg-stone-200', 'rounded-sm');
+                        } else if (cell.type === 'label') {
+                             cellDiv.classList.add('text-stone-500', 'font-bold', 'w-auto');
+                             cellDiv.textContent = cell.text;
+                        }
+                        seatMap.appendChild(cellDiv);
+                    });
+                });
+            }
+
+            /**
+             * 設定對 Firestore 文件的即時監聽器。
+             * 這是資料持久化和同步的核心。
+             */
+            async function setupFirestoreListener() {
+                if (appState.firestoreUnsubscribe) {
+                    appState.firestoreUnsubscribe(); // 取消先前的監聽
+                }
+
+                const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+
+                // onSnapshot 提供文件的即時串流
+                appState.firestoreUnsubscribe = onSnapshot(mapDocRef, async (docSnap) => {
+                    if (docSnap.exists()) {
+                        console.log("從 Firestore 接收到更新。");
+                        const data = docSnap.data();
+                        // 用 Firestore 的資料更新本地狀態
+                        appState.seats = data.seats;
+                    } else {
+                        console.log("Firestore 中無此文件，正在建立...");
+                        // 如果文件不存在，用初始佈局建立它
+                        await setDoc(mapDocRef, { seats: appState.seats });
+                        console.log("已將初始座位圖儲存至 Firestore。");
+                    }
+                    
+                    // 使用最新狀態渲染/更新UI
+                    renderSeatMap();
+                    updateUIOnLoad();
+                    updateStats();
+                }, (error) => {
+                    console.error("Firestore 監聽器錯誤: ", error);
+                    alert("無法連接到協作服務，請檢查您的 Firebase 設定和網路連線。");
+                });
+            }
+
+            /**
+             * 處理座位點擊事件，循環切換狀態並更新 Firestore。
+             */
+            async function handleSeatClick(event) {
+                const seatDiv = event.target.closest('.seat');
+                if (!seatDiv) return;
+
+                const seatId = seatDiv.dataset.id;
+                const mapDocRef = doc(db, 'seat-maps', appState.mapId);
+
+                try {
+                    // 使用 transaction 以安全地讀取和寫入資料，避免多人同時操作時發生衝突
+                    await runTransaction(db, async (transaction) => {
+                        const docSnap = await transaction.get(mapDocRef);
+                        if (!docSnap.exists()) throw "文件不存在！";
+
+                        const seats = docSnap.data().seats;
+                        const seatIndex = seats.findIndex(s => s.id === seatId);
+                        if (seatIndex === -1) throw `在 Firestore 文件中找不到座位 ${seatId}。`;
+
+                        const seat = seats[seatIndex];
+                        const currentStatusIndex = seatStatus.indexOf(seat.status);
+                        seat.status = seatStatus[(currentStatusIndex + 1) % seatStatus.length];
+                        
+                        // 在 transaction 中更新整個陣列
+                        transaction.update(mapDocRef, { seats: seats });
+                    });
+                    console.log(`座位 ${seatId} 的 transaction 成功提交。`);
+                } catch (e) {
+                    console.error("Transaction 失敗: ", e);
+                }
+            }
+
+            /**
+             * Updates the color of a seat element based on its status.
+             * @param {HTMLElement} element The seat div element.
+             * @param {object} seatData The seat object from the appState.
+             */
+            function updateSeatColor(element, seatData) {
+                // Clear existing color classes
+                element.className = element.className.replace(/\bbg-\w+-\d{2,3}\b/g, '').replace(/\bhover:bg-\w+-\d{2,3}\b/g, '');
+                
+                let colorClass = '';
+                if (seatData.status === 'unused') {
+                    // Use special colors for unused wheelchair and companion seats
+                    if (seatData.type === 'wheelchair') {
+                        colorClass = statusColors['unused-wheelchair'];
+                    } else if (seatData.type === 'companion') {
+                        colorClass = statusColors['unused-companion'];
+                    } else {
+                        colorClass = statusColors['unused-regular'];
+                    }
+                } else {
+                    // Use standard colors for reserved and claimed
+                    colorClass = statusColors[seatData.status];
+                }
+                colorClass.split(' ').forEach(cls => element.classList.add(cls));
+            }
+
+            /**
+             * Updates the seat status counts displayed in the sidebar.
+             */
+            function updateStats() {
+                const counts = appState.seats.reduce((acc, seat) => {
+                    acc[seat.status] = (acc[seat.status] || 0) + 1;
+                    return acc;
+                }, {});
+
+                document.getElementById('unused-count').textContent = counts.unused || 0;
+                document.getElementById('reserved-count').textContent = counts.reserved || 0;
+                document.getElementById('claimed-count').textContent = counts.claimed || 0;
+                document.getElementById('unavailable-count').textContent = counts.unavailable || 0;
+            }
+            
+            /**
+             * Hides the placeholder and shows the main UI elements.
+             */
+            function updateUIOnLoad() {
+                placeholder.classList.add('hidden');
+                statsContainer.classList.remove('hidden');
+                stageIndicator.classList.remove('hidden');
+                zoomControls.classList.remove('hidden');
+            }
+
+            /**
+             * Adjusts the zoom level of the seat map.
+             * @param {number} amount The amount to change the zoom level by.
+             */
+            function updateZoom(amount) {
+                appState.zoomLevel += amount;
+                appState.zoomLevel = Math.max(0.5, Math.min(appState.zoomLevel, 2.0));
+                seatMapContainer.style.transform = `scale(${appState.zoomLevel})`;
+                zoomLevelDisplay.textContent = `${Math.round(appState.zoomLevel * 100)}%`;
+            }
+        });
+    </script>
+</body>
+</html>
